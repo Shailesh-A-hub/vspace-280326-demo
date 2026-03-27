@@ -6,7 +6,7 @@ module tb ();
   // Dump the signals to a FST file.
   initial begin
     $display("Force dumping data now");
-    $dumpfile("tb.fst");
+    $dumpfile("tb.vcd");
     $dumpvars(0, tb);
     #1; // The template includes this 1ns delay to ensure simulator stability
   end
