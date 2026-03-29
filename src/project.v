@@ -1,86 +1,137 @@
 `default_nettype none
 
-module tt_um_advaittej_stopwatch #(
-    parameter CLOCKS_PER_SECOND = 24'd9_999_999
-)(
-    // DO NOT CHANGE THESE NAMES!!
-    // The factory tools require these exact port definitions
+module tt_um_shailesh_spo2_engine (
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
     input  wire [7:0] uio_in,   // IOs: Input path
     output wire [7:0] uio_out,  // IOs: Output path
-    output wire [7:0] uio_oe,   // IOs: Enable path (active high: 0=input, 1=output)
-    input  wire       ena,      // always 1 when the design is powered
-    input  wire       clk,      // clock
-    input  wire       rst_n     // reset_n - low to reset
+    output wire [7:0] uio_oe,   // IOs: Enable path
+        input  wire       ena,      // always 1 when the design is powered
+        input  wire       clk,      // clock
+        input  wire       rst_n     // reset_n - low to reset
 );
 
-    // Intuitive aliasing ie translating TT to readable names
-    assign uio_out = 8'b0; // Tie off unused pins to prevent errors
-    assign uio_oe  = 8'b0;
+        // Pin mapping
+    wire serial_in   = ui_in[0];
+    wire sample_clk  = ui_in[1]; // SPI clock
+    wire channel_sel = ui_in[2]; // 0=Red, 1=IR
 
-    // Inverting active-low reset so 1 means reset now for our logic
-    wire reset_active = !rst_n;       
-    
-    // Pin 0 of input block is button
-    wire start_pause_btn = ui_in[0];  
-    
-    // Internal wire for 7-segment data
-    wire [6:0] led_segments;          
+        // 1. SPI Deserializer
+    reg [7:0] shift_reg;
+    reg [2:0] bit_cnt;
+    reg [7:0] red_sample, ir_sample;
+        reg sample_ready;
 
-    // Drive physical output pins with our internal data
-    assign uo_out[6:0] = led_segments; 
-    assign uo_out[7]   = 1'b0; // Decimal point off
-
-    // CLOCK DIVIDER
-    reg [23:0] clock_counter;
-    wire one_second_pulse = (clock_counter == CLOCKS_PER_SECOND);
-
-    always @(posedge clk or posedge reset_active) begin
-        if (reset_active) begin
-            clock_counter <= 0;
-        end else if (start_pause_btn) begin
-            if (one_second_pulse) begin
-                clock_counter <= 0;
+    always @(posedge sample_clk or negedge rst_n) begin
+        if (!rst_n) begin
+                        shift_reg <= 8'b0;
+                        bit_cnt <= 3'b0;
+                        sample_ready <= 1'b0;
+                        red_sample <= 8'b0;
+                        ir_sample <= 8'b0;
+        end else begin
+            shift_reg <= {shift_reg[6:0], serial_in};
+            if (bit_cnt == 3'd7) begin
+                if (!channel_sel) red_sample <= {shift_reg[6:0], serial_in};
+                else ir_sample <= {shift_reg[6:0], serial_in};
+                                sample_ready <= 1'b1;
+                                bit_cnt <= 3'b0;
             end else begin
-                clock_counter <= clock_counter + 1;
+                                bit_cnt <= bit_cnt + 1'b1;
+                                sample_ready <= 1'b0;
             end
         end
     end
 
-    // DIGIT COUNTER: counts 0 to 9
-    reg [3:0] current_digit;
+    // 2. DC Extractor (4-sample moving average)
+        reg sample_ready_sync, sample_ready_prev;
+    always @(posedge clk) begin
+                sample_ready_sync <= sample_ready;
+                sample_ready_prev <= sample_ready_sync;
+    end
+        wire sample_pulse = sample_ready_sync && !sample_ready_prev;
 
-    always @(posedge clk or posedge reset_active) begin
-        if (reset_active) begin
-            current_digit <= 0;
-        end else if (start_pause_btn && one_second_pulse) begin
-            if (current_digit == 9) begin
-                current_digit <= 0;
+    reg [7:0] r_m0, r_m1, r_m2, r_m3;
+    reg [7:0] i_m0, i_m1, i_m2, i_m3;
+    reg [9:0] r_sum, i_sum;
+    wire [7:0] r_dc = r_sum[9:2];
+    wire [7:0] i_dc = i_sum[9:2];
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+                        r_m0 <= 0; r_m1 <= 0; r_m2 <= 0; r_m3 <= 0;
+                        i_m0 <= 0; i_m1 <= 0; i_m2 <= 0; i_m3 <= 0;
+                        r_sum <= 0; i_sum <= 0;
+        end else if (sample_pulse) begin
+            if (!channel_sel) begin
+                                r_m0 <= red_sample; r_m1 <= r_m0; r_m2 <= r_m1; r_m3 <= r_m2;
+                                r_sum <= red_sample + r_m0 + r_m1 + r_m2;
             end else begin
-                current_digit <= current_digit + 1;
+                                i_m0 <= ir_sample; i_m1 <= i_m0; i_m2 <= i_m1; i_m3 <= i_m2;
+                                i_sum <= ir_sample + i_m0 + i_m1 + i_m2;
             end
         end
     end
 
-    // 7-SEGMENT DECODER: translates to LEDs
-    reg [6:0] decoded_leds;
-    assign led_segments = decoded_leds;
+        // 3. AC Peak Holder
+    reg [7:0] r_ac_max, i_ac_max;
+    reg [7:0] cycle_cnt;
+    wire [7:0] r_diff = (red_sample > r_dc) ? (red_sample - r_dc) : (r_dc - red_sample);
+    wire [7:0] i_diff = (ir_sample > i_dc) ? (ir_sample - i_dc) : (i_dc - ir_sample);
 
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+                        r_ac_max <= 0; i_ac_max <= 0; cycle_cnt <= 0;
+        end else if (sample_pulse) begin
+            if (cycle_cnt == 8'd255) begin
+                                r_ac_max <= 0; i_ac_max <= 0; cycle_cnt <= 0;
+            end else begin
+                if (!channel_sel && r_diff > r_ac_max) r_ac_max <= r_diff;
+                if (channel_sel && i_diff > i_ac_max) i_ac_max <= i_diff;
+                                cycle_cnt <= cycle_cnt + 1'b1;
+            end
+        end
+    end
+
+        // 4. Ratio Unit
+    wire [15:0] num = r_ac_max * i_dc;
+    wire [15:0] den = i_ac_max * r_dc;
+    reg [3:0] r_idx;
     always @(*) begin
-        case (current_digit)
-            4'd0: decoded_leds = 7'b0111111;
-            4'd1: decoded_leds = 7'b0000110;
-            4'd2: decoded_leds = 7'b1011011;
-            4'd3: decoded_leds = 7'b1001111;
-            4'd4: decoded_leds = 7'b1100110;
-            4'd5: decoded_leds = 7'b1101101;
-            4'd6: decoded_leds = 7'b1111101;
-            4'd7: decoded_leds = 7'b0000111;
-            4'd8: decoded_leds = 7'b1111111;
-            4'd9: decoded_leds = 7'b1101111;
-            default: decoded_leds = 7'b0000000;
+        if (den == 0) r_idx = 4'd0;
+        else if (num >= (den << 1)) r_idx = 4'd15;
+        else r_idx = (num << 3) / den;
+    end
+
+        // 5. Calibration LUT
+    reg [6:0] spo2;
+    always @(*) begin
+        case (r_idx)
+                        4'd0: spo2 = 99; 4'd1: spo2 = 98; 4'd2: spo2 = 97; 4'd3: spo2 = 96;
+                        4'd4: spo2 = 95; 4'd5: spo2 = 94; 4'd6: spo2 = 93; 4'd7: spo2 = 92;
+                        4'd8: spo2 = 91; 4'd9: spo2 = 90; 4'd10: spo2 = 88; 4'd11: spo2 = 86;
+                        4'd12: spo2 = 84; 4'd13: spo2 = 82; 4'd14: spo2 = 80; 4'd15: spo2 = 75;
+                        default: spo2 = 0;
         endcase
     end
+
+        // 6. Control FSM
+    reg [1:0] st;
+        reg vld;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin st <= 0; vld <= 0; end
+                else begin
+                    case (st)
+                        2'd0: if (sample_pulse) st <= 2'd1;
+                        2'd1: if (cycle_cnt == 8'd254) st <= 2'd2; else st <= 2'd0;
+                        2'd2: begin st <= 2'd3; vld <= 1'b1; end
+                        2'd3: begin st <= 2'd0; vld <= 1'b0; end
+                    endcase
+                end
+    end
+
+    assign uo_out = {vld, spo2};
+        assign uio_out = 8'b0;
+        assign uio_oe = 8'b0;
 
 endmodule
