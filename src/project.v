@@ -44,10 +44,15 @@ module tt_um_shailesh_spo2_engine (
     end
 
     // 2. DC Extractor (4-sample moving average)
-        reg sample_ready_sync, sample_ready_prev;
-    always @(posedge clk) begin
-                sample_ready_sync <= sample_ready;
-                sample_ready_prev <= sample_ready_sync;
+	reg sample_ready_sync, sample_ready_prev;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            sample_ready_sync <= 1'b0;
+            sample_ready_prev <= 1'b0;
+        end else begin
+            sample_ready_sync <= sample_ready;
+            sample_ready_prev <= sample_ready_sync;
+        end
     end
         wire sample_pulse = sample_ready_sync && !sample_ready_prev;
 
