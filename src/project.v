@@ -12,7 +12,7 @@ module tt_um_shailesh_spo2_engine (
 );
 
     // Suppress unused-signal warnings
-    wire _unused = &{ena, uio_in, ui_in[7:3], 1'b0};
+    wire _unused = &{ena, uio_in, ui_in[7:3], r_sum[1:0], i_sum[1:0], 1'b0};
 
     // Pin mapping
     wire serial_in   = ui_in[0];
@@ -20,7 +20,7 @@ module tt_um_shailesh_spo2_engine (
     wire channel_sel = ui_in[2]; // 0=Red, 1=IR
 
     // 1. SPI Deserializer
-    reg [7:0] shift_reg;
+    reg [6:0] shift_reg;
     reg [2:0] bit_cnt;
     reg [7:0] red_sample, ir_sample;
     reg sample_ready;
@@ -33,10 +33,10 @@ module tt_um_shailesh_spo2_engine (
             red_sample   <= 8'b0;
             ir_sample    <= 8'b0;
         end else begin
-            shift_reg <= {shift_reg[6:0], serial_in};
+            shift_reg <= {shift_reg[5:0], serial_in};
             if (bit_cnt == 3'd7) begin
-                if (!channel_sel) red_sample <= {shift_reg[6:0], serial_in};
-                else              ir_sample  <= {shift_reg[6:0], serial_in};
+                if (!channel_sel) red_sample <= {shift_reg, serial_in};
+                else              ir_sample  <= {shift_reg, serial_in};
                 sample_ready <= 1'b1;
                 bit_cnt      <= 3'b0;
             end else begin
