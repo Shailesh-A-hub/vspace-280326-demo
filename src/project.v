@@ -11,15 +11,14 @@ module tt_um_shailesh_spo2_engine (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-    // Suppress unused-signal warnings
-    wire _unused = &{ena, uio_in, ui_in[7:3], r_sum[1:0], i_sum[1:0], 1'b0};
-
     // Pin mapping
     wire serial_in   = ui_in[0];
     wire sample_clk  = ui_in[1]; // SPI clock
     wire channel_sel = ui_in[2]; // 0=Red, 1=IR
 
-    // 1. SPI Deserializer
+    // =========================================================
+    // 1. SPI Deserializer (clocked on external SPI clock)
+    // =========================================================
     reg [6:0] shift_reg;
     reg [2:0] bit_cnt;
     reg [7:0] red_sample, ir_sample;
@@ -27,7 +26,7 @@ module tt_um_shailesh_spo2_engine (
 
     always @(posedge sample_clk or negedge rst_n) begin
         if (!rst_n) begin
-            shift_reg    <= 8'b0;
+            shift_reg    <= 7'b0;
             bit_cnt      <= 3'b0;
             sample_ready <= 1'b0;
             red_sample   <= 8'b0;
@@ -46,7 +45,9 @@ module tt_um_shailesh_spo2_engine (
         end
     end
 
-    // 2. DC Extractor (4-sample moving average)
+    // =========================================================
+    // 2. Clock-Domain Crossing: sample_ready -> sample_pulse
+    // =========================================================
     reg sample_ready_sync, sample_ready_prev;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
@@ -59,6 +60,9 @@ module tt_um_shailesh_spo2_engine (
     end
     wire sample_pulse = sample_ready_sync && !sample_ready_prev;
 
+    // =========================================================
+    // 3. DC Extractor (4-sample moving average, per channel)
+    // =========================================================
     reg [7:0] r_m0, r_m1, r_m2;
     reg [7:0] i_m0, i_m1, i_m2;
     reg [9:0] r_sum, i_sum;
@@ -81,35 +85,161 @@ module tt_um_shailesh_spo2_engine (
         end
     end
 
-    // 3. AC Peak Holder
-    reg [7:0] r_ac_max, i_ac_max;
+    // =========================================================
+    // 4. AC Peak Holder
+    // =========================================================
+    reg [7:0] r_ac_pk, i_ac_pk;
     reg [7:0] cycle_cnt;
     wire [7:0] r_diff = (red_sample > r_dc) ? (red_sample - r_dc) : (r_dc - red_sample);
     wire [7:0] i_diff = (ir_sample  > i_dc) ? (ir_sample  - i_dc) : (i_dc - ir_sample);
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            r_ac_max <= 0; i_ac_max <= 0; cycle_cnt <= 0;
+            r_ac_pk <= 0; i_ac_pk <= 0; cycle_cnt <= 0;
         end else if (sample_pulse) begin
             if (cycle_cnt == 8'd255) begin
-                r_ac_max <= 0; i_ac_max <= 0; cycle_cnt <= 0;
+                r_ac_pk <= 0; i_ac_pk <= 0; cycle_cnt <= 0;
             end else begin
-                if (!channel_sel && r_diff > r_ac_max) r_ac_max <= r_diff;
-                if (channel_sel  && i_diff > i_ac_max) i_ac_max <= i_diff;
+                if (!channel_sel && r_diff > r_ac_pk) r_ac_pk <= r_diff;
+                if ( channel_sel && i_diff > i_ac_pk) i_ac_pk <= i_diff;
                 cycle_cnt <= cycle_cnt + 1'b1;
             end
         end
     end
 
-    // 4. Ratio Unit
-    wire [15:0] num = r_ac_max * i_dc;
-    wire [15:0] den = i_ac_max * r_dc;
-    reg [3:0] r_idx;
-    reg [19:0] accum_calc;
-    reg [19:0] num_calc;
-    reg [19:0] den_ext;   // 20-bit to match accum_calc width
+    // =========================================================
+    // 5. Ratio Computation via Sequential Multiply + Compare
+    //    Goal: compute r_idx = (r_ac_pk * i_dc * 8) / (i_ac_pk * r_dc)
+    //    Method: iteratively accumulate (i_ac_pk * r_dc) and count
+    //    how many times it fits into (r_ac_pk * i_dc * 8).
+    //    Both multiplies are done sequentially (shift-and-add)
+    //    to save area vs. combinational multipliers.
+    // =========================================================
 
-    // 5. Calibration LUT
+    // --- Sequential multiplier ---
+    reg [15:0] mul_result;
+    reg [7:0]  mul_a, mul_b;
+    reg [3:0]  mul_step;
+    reg        mul_busy;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            mul_result <= 0;
+            mul_step   <= 0;
+            mul_busy   <= 0;
+            mul_a      <= 0;
+            mul_b      <= 0;
+        end else if (mul_busy) begin
+            if (mul_step < 4'd8) begin
+                if (mul_b[mul_step[2:0]])
+                    mul_result <= mul_result + ({8'b0, mul_a} << mul_step[2:0]);
+                mul_step <= mul_step + 1;
+            end else begin
+                mul_busy <= 0;
+            end
+        end
+    end
+
+    // =========================================================
+    // 6. Control FSM
+    //    States: IDLE(0) -> COLLECT(1) -> MUL_NUM(2) -> MUL_DEN(3)
+    //            -> DIVIDE(4) -> DONE(5)
+    // =========================================================
+    reg [2:0] st;
+    reg [3:0] r_idx;
+    reg [18:0] num_val;    // r_ac_pk * i_dc * 8
+    reg [15:0] den_val;    // i_ac_pk * r_dc
+    reg [18:0] accum;
+    reg vld;
+
+    localparam S_IDLE     = 3'd0;
+    localparam S_COLLECT  = 3'd1;
+    localparam S_MUL_NUM  = 3'd2;
+    localparam S_MUL_DEN  = 3'd3;
+    localparam S_DIVIDE   = 3'd4;
+    localparam S_DONE     = 3'd5;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            st       <= S_IDLE;
+            vld      <= 0;
+            r_idx    <= 0;
+            num_val  <= 0;
+            den_val  <= 0;
+            accum    <= 0;
+        end else begin
+            case (st)
+                S_IDLE: begin
+                    if (sample_pulse) st <= S_COLLECT;
+                end
+
+                S_COLLECT: begin
+                    if (cycle_cnt == 8'd254) begin
+                        // Start multiplying: num = r_ac_pk * i_dc
+                        mul_a      <= r_ac_pk;
+                        mul_b      <= i_dc;
+                        mul_result <= 0;
+                        mul_step   <= 0;
+                        mul_busy   <= 1;
+                        st         <= S_MUL_NUM;
+                    end else begin
+                        st <= S_IDLE;
+                    end
+                end
+
+                S_MUL_NUM: begin
+                    if (!mul_busy) begin
+                        // num multiply done, save result * 8
+                        num_val <= {mul_result[15:0], 3'b0};
+                        // Start multiplying: den = i_ac_pk * r_dc
+                        mul_a      <= i_ac_pk;
+                        mul_b      <= r_dc;
+                        mul_result <= 0;
+                        mul_step   <= 0;
+                        mul_busy   <= 1;
+                        st         <= S_MUL_DEN;
+                    end
+                end
+
+                S_MUL_DEN: begin
+                    if (!mul_busy) begin
+                        den_val <= mul_result;
+                        accum   <= {3'b0, mul_result};
+                        r_idx   <= 0;
+                        if (mul_result == 0) begin
+                            // Division by zero - default
+                            r_idx <= 0;
+                            st    <= S_DONE;
+                            vld   <= 1'b1;
+                        end else begin
+                            st <= S_DIVIDE;
+                        end
+                    end
+                end
+
+                S_DIVIDE: begin
+                    if (r_idx == 4'd15 || accum > num_val) begin
+                        st  <= S_DONE;
+                        vld <= 1'b1;
+                    end else begin
+                        accum <= accum + {3'b0, den_val};
+                        r_idx <= r_idx + 1;
+                    end
+                end
+
+                S_DONE: begin
+                    // vld stays latched high; go idle for next window
+                    st <= S_IDLE;
+                end
+
+                default: st <= S_IDLE;
+            endcase
+        end
+    end
+
+    // =========================================================
+    // 7. Calibration LUT (R-ratio index -> SpO2 %)
+    // =========================================================
     reg [6:0] spo2;
     always @(*) begin
         case (r_idx)
@@ -121,47 +251,14 @@ module tt_um_shailesh_spo2_engine (
         endcase
     end
 
-    // 6. Control FSM
-    reg [1:0] st;
-    reg vld;
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            st         <= 0;
-            vld        <= 0;
-            r_idx      <= 0;
-            accum_calc <= 0;
-            num_calc   <= 0;
-            den_ext    <= 0;
-        end else begin
-            case (st)
-                2'd0: if (sample_pulse) st <= 2'd1;
-                2'd1: if (cycle_cnt == 8'd254) begin
-                          st         <= 2'd2;
-                          num_calc   <= {4'b0, num} << 3;
-                          den_ext    <= {4'b0, den};
-                          accum_calc <= {4'b0, den};
-                          r_idx      <= 0;
-                      end else st <= 2'd0;
-                2'd2: begin
-                          if (den_ext == 0) begin
-                              r_idx <= 0;
-                              st    <= 2'd0;
-                              vld   <= 1'b1;
-                          end else if (r_idx == 4'd15 || accum_calc > num_calc) begin
-                              st  <= 2'd0;
-                              vld <= 1'b1;
-                          end else begin
-                              accum_calc <= accum_calc + den_ext;
-                              r_idx      <= r_idx + 1;
-                          end
-                      end
-                default: st <= 2'd0;
-            endcase
-        end
-    end
-
+    // =========================================================
+    // Output assignments
+    // =========================================================
     assign uo_out  = {vld, spo2};
     assign uio_out = 8'b0;
     assign uio_oe  = 8'b0;
+
+    // Suppress unused-signal warnings
+    wire _unused = &{ena, uio_in, ui_in[7:3], r_sum[1:0], i_sum[1:0], 1'b0};
 
 endmodule

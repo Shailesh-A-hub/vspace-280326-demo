@@ -4,8 +4,8 @@ from cocotb.triggers import Timer, FallingEdge, RisingEdge, ClockCycles
 
 @cocotb.test()
 async def test_spo2_engine(dut):
-    # Start the clock
-    clock = Clock(dut.clk, 100, units="ns")  # 10MHz
+    # Start the clock (10 MHz)
+    clock = Clock(dut.clk, 100, unit="ns")
     cocotb.start_soon(clock.start())
 
     # Initialize all inputs to known values BEFORE reset
@@ -44,6 +44,7 @@ async def test_spo2_engine(dut):
         await ClockCycles(dut.clk, 4)
 
     # Wait for vld (bit 7 of uo_out) to go high
+    # The sequential multiplier + divider takes ~30 clocks, allow plenty of margin
     for _ in range(10000):
         val = dut.uo_out.value
         if val.is_resolvable and ((int(val) >> 7) & 1):
