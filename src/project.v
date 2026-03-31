@@ -145,17 +145,17 @@ module tt_um_shailesh_spo2_engine (
                 2'd2: begin
                           if (den_ext == 0) begin
                               r_idx <= 0;
-                              st    <= 2'd3;
+                              st    <= 2'd0;
                               vld   <= 1'b1;
                           end else if (r_idx == 4'd15 || accum_calc > num_calc) begin
-                              st  <= 2'd3;
+                              st  <= 2'd0;
                               vld <= 1'b1;
                           end else begin
                               accum_calc <= accum_calc + den_ext;
                               r_idx      <= r_idx + 1;
                           end
                       end
-                2'd3: begin st <= 2'd0; vld <= 1'b0; end
+                default: st <= 2'd0;
             endcase
         end
     end
