@@ -97,11 +97,9 @@ module tt_um_shailesh_spo2_engine (
     wire [15:0] num = r_ac_max * i_dc;
     wire [15:0] den = i_ac_max * r_dc;
     reg [3:0] r_idx;
-    always @(*) begin
-        if (den == 0) r_idx = 4'd0;
-        else if (num >= (den << 1)) r_idx = 4'd15;
-        else r_idx = (num << 3) / den;
-    end
+        reg [19:0] accum_calc;
+        reg [19:0] num_calc;
+        reg [15:0] den_calc;
 
         // 5. Calibration LUT
     reg [6:0] spo2;
@@ -119,15 +117,39 @@ module tt_um_shailesh_spo2_engine (
     reg [1:0] st;
         reg vld;
     always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin st <= 0; vld <= 0; end
-                else begin
-                    case (st)
-                        2'd0: if (sample_pulse) st <= 2'd1;
-                        2'd1: if (cycle_cnt == 8'd254) st <= 2'd2; else st <= 2'd0;
-                        2'd2: begin st <= 2'd3; vld <= 1'b1; end
-                        2'd3: begin st <= 2'd0; vld <= 1'b0; end
-                    endcase
-                end
+        if (!rst_n) begin 
+            st <= 0; 
+            vld <= 0; 
+            r_idx <= 0;
+            accum_calc <= 0;
+            num_calc <= 0;
+            den_calc <= 0;
+        end else begin
+            case (st)
+                2'd0: if (sample_pulse) st <= 2'd1;
+                2'd1: if (cycle_cnt == 8'd254) begin 
+                          st <= 2'd2; 
+                          num_calc <= {4'b0, num} << 3; 
+                          den_calc <= den; 
+                          accum_calc <= {4'b0, den}; 
+                          r_idx <= 0; 
+                      end else st <= 2'd0;
+                2'd2: begin 
+                          if (den_calc == 0) begin
+                              r_idx <= 0;
+                              st <= 2'd3;
+                              vld <= 1'b1;
+                          end else if (r_idx == 4'd15 || accum_calc > num_calc) begin
+                              st <= 2'd3;
+                              vld <= 1'b1;
+                          end else begin
+                              accum_calc <= accum_calc + den_calc;
+                              r_idx <= r_idx + 1;
+                          end
+                      end
+                2'd3: begin st <= 2'd0; vld <= 1'b0; end
+            endcase
+        end
     end
 
     assign uo_out = {vld, spo2};

@@ -36,11 +36,16 @@ async def test_spo2_engine(dut):
         await send_spi_sample(i, 1) # Send IR
         await ClockCycles(dut.clk, 2)
 
-    # Wait for processing
-    await ClockCycles(dut.clk, 1000)
+    # Wait for vld (bit 7 of uo_out) to go high
+    await RisingEdge(dut.clk)
+    for _ in range(5000):
+        if (int(dut.uo_out.value) >> 7) & 1:
+            break
+        await RisingEdge(dut.clk)
 
     # Check outputs
-    spo2_val = dut.uo_out.value & 0x7F
-    valid_flag = (dut.uo_out.value >> 7) & 1
+    spo2_val = int(dut.uo_out.value) & 0x7F
+    valid_flag = (int(dut.uo_out.value) >> 7) & 1
 
     dut._log.info(f"SpO2 Output: {spo2_val}%, Valid: {valid_flag}")
+    assert valid_flag == 1, "Calculation did not produce a valid output in time!"
