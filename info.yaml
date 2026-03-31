@@ -1,14 +1,14 @@
 # Tiny Tapeout project information
 project:
-  title:        "Low-Power SpO2 Ratio Engine"      # Project title
-  author:       "A SHAILESH-24BEC0665"             # Your name
-  discord:      ""                                 # Your discord username, no #0000 
-  description:  "uW-class SpO2 signal processor for pulse oximetry"      # One line description of what your project does
-  language:     "Verilog"                          # Language used (Verilog, VHDL, Amaranth, etc)
-  clock_hz:     10000000                           # Clock frequency in Hz (default 10MHz)
+  title:        "Low-Power SpO2 Ratio Engine"
+  author:       "A SHAILESH-24BEC0665"
+  discord:      ""
+  description:  "uW-class SpO2 signal processor for pulse oximetry"
+  language:     "Verilog"
+  clock_hz:     10000000
 
-  # How many tiles your design occupies? A tile is about 167x108 uM2, 1 tile contains ~1500 gates
-  tiles: "1x1"          # e.g. 1x1, 1x2, 2x2, etc
+  # How many tiles your design occupies? A single tile is about 167x108 uM.
+  tiles: "1x1"
 
   # Your top module name must start with "tt_um_".
   top_module: "tt_um_shailesh_spo2_engine"
