@@ -1,7 +1,7 @@
 # Tiny Tapeout project information
 project:
   title:        "Low-Power SpO2 Ratio Engine"
-  author:       "A SHAILESH-24BEC0665"
+  author:       "Shreelakshmi SP-24bvd0219, Sanjay K 24BEC0506, SHAILESH A-24BEC0665"
   discord:      ""
   description:  "uW-class SpO2 signal processor for pulse oximetry"
   language:     "Verilog"
