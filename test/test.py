@@ -1,87 +1,60 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge
+from cocotb.triggers import Timer, FallingEdge, RisingEdge, ClockCycles
 
-# REFERENCE MODEL (Golden Vector Generator)
-class StopwatchModel:
-    def __init__(self):
-        self.digit = 0
-        self.running = False
-        # 7-segment hex values for 0-9
-        self.segments = [
-            0b0111111, 0b0000110, 0b1011011, 0b1001111, 0b1100110, 
-            0b1101101, 0b1111101, 0b0000111, 0b1111111, 0b1101111
-        ]
-
-    def reset(self):
-        self.digit = 0
-        self.running = False
-
-    def set_run_state(self, state):
-        self.running = bool(state)
-
-    def tick(self):
-        if self.running:
-            if self.digit == 9:
-                self.digit = 0
-            else:
-                self.digit += 1
-
-    def get_expected_output(self):
-        return self.segments[self.digit]
-
-# TEST SUITE
 @cocotb.test()
-async def test_stopwatch_golden_vectors(dut):
-    dut._log.info("Starting Golden Vector Stopwatch Test")
-    
-    # Initialize software reference model
-    model = StopwatchModel()
-
-    # Set the clock period (Using 10us to match the official TT template)
-    clock = Clock(dut.clk, 10, unit="us")
+async def test_spo2_engine(dut):
+    # Start the clock (10 MHz)
+    clock = Clock(dut.clk, 100, unit="ns")
     cocotb.start_soon(clock.start())
 
-    # Phase 1: Reset Sequence
-    dut._log.info("Resetting design")
-    dut.ena.value = 1
+    # Initialize all inputs to known values BEFORE reset
     dut.ui_in.value = 0
     dut.uio_in.value = 0
+    dut.ena.value = 1
     dut.rst_n.value = 0
     await ClockCycles(dut.clk, 10)
     dut.rst_n.value = 1
-    model.reset()
-    await ClockCycles(dut.clk, 2)
-    
-    assert int(dut.uo_out.value) == model.get_expected_output(), "Failed at Reset!"
+    await ClockCycles(dut.clk, 10)
 
-    # Phase 2: Counting Sequence
-    dut._log.info("Pressing Start Button")
-    dut.ui_in.value = 1
-    model.set_run_state(True)
+    # Helper: send an 8-bit sample via SPI using WHOLE-BUS writes
+    # ui_in[0] = serial data, ui_in[1] = SPI clock, ui_in[2] = channel select
+    async def send_spi_sample(sample, channel):
+        ch_bit = (channel & 1) << 2  # bit 2
+        for i in range(7, -1, -1):
+            data_bit = (sample >> i) & 1
+            # Set data with SPI clk LOW
+            dut.ui_in.value = data_bit | ch_bit
+            await ClockCycles(dut.clk, 1)
+            # SPI clk HIGH (posedge triggers deserializer)
+            dut.ui_in.value = data_bit | 0x02 | ch_bit
+            await ClockCycles(dut.clk, 1)
+            # SPI clk LOW
+            dut.ui_in.value = data_bit | ch_bit
+            await ClockCycles(dut.clk, 1)
 
-    # Test 15 'seconds' (Our tb.v overrides 1 second to equal 10 clocks)
-    for simulated_second in range(15):
-        await ClockCycles(dut.clk, 10)
-        await FallingEdge(dut.clk)
-        model.tick()
-        
-        expected = model.get_expected_output()
-        actual = int(dut.uo_out.value)
-        
-        dut._log.info(f"Sec {simulated_second + 1}: Expected {bin(expected)}, Got {bin(actual)}")
-        assert actual == expected, f"Mismatch at second {simulated_second + 1}!"
+    # Simulate samples: 256 red/IR pairs
+    red_samples = [100, 110, 100, 90] * 64
+    ir_samples = [200, 220, 200, 180] * 64
 
-    # Phase 3: Pause Sequence
-    dut._log.info("Pressing Pause Button")
-    dut.ui_in.value = 0
-    model.set_run_state(False)
-    
-    # Wait 5 'seconds' to ensure it doesn't count while paused
-    for _ in range(5):
-        await ClockCycles(dut.clk, 10)
-        await FallingEdge(dut.clk)
-        model.tick()
-        
-    assert int(dut.uo_out.value) == model.get_expected_output(), "Pause failed! HW kept counting."
-    dut._log.info("All Golden Vector tests passed perfectly!")
+    for r, ir in zip(red_samples, ir_samples):
+        await send_spi_sample(r, 0)   # Red channel
+        await ClockCycles(dut.clk, 4)
+        await send_spi_sample(ir, 1)  # IR channel
+        await ClockCycles(dut.clk, 4)
+
+    # Wait for vld (bit 7 of uo_out) to go high
+    # The sequential multiplier + divider takes ~30 clocks, allow plenty of margin
+    for _ in range(10000):
+        val = dut.uo_out.value
+        if val.is_resolvable and ((int(val) >> 7) & 1):
+            break
+        await RisingEdge(dut.clk)
+
+    # Read outputs
+    raw = int(dut.uo_out.value)
+    spo2_val = raw & 0x7F
+    valid_flag = (raw >> 7) & 1
+
+    dut._log.info(f"SpO2 Output: {spo2_val}%, Valid: {valid_flag}")
+    assert valid_flag == 1, "Calculation did not produce a valid output in time!"

@@ -1,17 +1,17 @@
 # Tiny Tapeout project information
 project:
-  title:        "V-SPACE Demo Hardware Stopwatch"
-  author:       "Advaittej"
-  discord:      "" 
-  description:  "1-second interval stopwatch with start/pause toggled via input switch."
-  language:     "Verilog" 
-  clock_hz:     10000000 
+  title:        "Low-Power SpO2 Ratio Engine"
+  author:       "A SHAILESH-24BEC0665"
+  discord:      ""
+  description:  "uW-class SpO2 signal processor for pulse oximetry"
+  language:     "Verilog"
+  clock_hz:     10000000
 
-  # How many tiles your design occupies?
-  tiles: "1x1" 
+  # How many tiles your design occupies? A single tile is about 167x108 uM.
+  tiles: "1x1"
 
-  # Your top module name must start with "tt_um_". 
-  top_module:  "tt_um_advaittej_stopwatch"
+  # Your top module name must start with "tt_um_".
+  top_module: "tt_um_shailesh_spo2_engine"
 
   # List your project's source files here.
   source_files:
@@ -20,9 +20,9 @@ project:
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 pinout:
   # Inputs
-  ui[0]: "Start / Pause Button"
-  ui[1]: ""
-  ui[2]: ""
+  ui[0]: "SPI Data In"
+  ui[1]: "SPI Clock In"
+  ui[2]: "Channel Select (0=Red, 1=IR)"
   ui[3]: ""
   ui[4]: ""
   ui[5]: ""
@@ -30,14 +30,14 @@ pinout:
   ui[7]: ""
 
   # Outputs
-  uo[0]: "Segment A"
-  uo[1]: "Segment B"
-  uo[2]: "Segment C"
-  uo[3]: "Segment D"
-  uo[4]: "Segment E"
-  uo[5]: "Segment F"
-  uo[6]: "Segment G"
-  uo[7]: "Tied Low"
+  uo[0]: "SpO2 Bit 0"
+  uo[1]: "SpO2 Bit 1"
+  uo[2]: "SpO2 Bit 2"
+  uo[3]: "SpO2 Bit 3"
+  uo[4]: "SpO2 Bit 4"
+  uo[5]: "SpO2 Bit 5"
+  uo[6]: "SpO2 Bit 6"
+  uo[7]: "Valid Flag"
 
   # Bidirectional pins
   uio[0]: ""

@@ -28,12 +28,7 @@ module tb ();
 `endif
 
 // Instantiate OUR module. Hide the parameter during Gate Level tests.
-    tt_um_advaittej_stopwatch 
-`ifndef GL_TEST
-    #(
-        .CLOCKS_PER_SECOND(24'd9) // 10 clocks = 1 second for fast testing
-    )
-`endif
+    tt_um_shailesh_spo2_engine
     user_project (
         
         // Include power ports for the Gate Level test:
