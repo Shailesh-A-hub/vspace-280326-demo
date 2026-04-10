@@ -8,38 +8,28 @@ You can also include images in this folder and reference them in the markdown. E
 -->
 
 ## How it works
-The V-SPACE Demo Hardware Stopwatch is a 1-second interval counter that displays digits from 0 to 9 on a standard 7-segment display. The design is broken down into three main hardware modules:
 
-+ The Clock Divider: The Tiny Tapeout board provides a default 10 MHz clock. Our Verilog code uses a 24-bit register to count exactly 9,999,999 clock cycles, generating a single 1 Hz pulse (one pulse per second).
+The Low-Power SpO2 Ratio Engine is a specialized digital signal processor designed for pulse oximetry. It processes raw alternating Red and Infrared (IR) LED measurements from an external sensor to calculate blood oxygen saturation levels. 
 
-+ The Digit Counter (BCD): Every time the 1 Hz pulse triggers, a 4-bit register increments. Once the counter reaches 9, it automatically wraps back around to 0.
-
-+ The 7-Segment Decoder: Pure combinational logic continuously reads the 4-bit counter and outputs the correct 7-bit binary pattern to light up the corresponding segments (A through G) on an LED display.
-
-The counting sequence is controlled by a hardware enable switch connected to ui_in[0]. When the switch is HIGH, the clock divider runs and the counter increments. When the switch is LOW, the clock divider pauses, freezing the current number on the display.
+To overcome the strict 1x1 tile area constraint of TinyTapeout, the architecture was heavily optimized:
+* **Multiplier Removal:** It completely eliminates bulky combinational multipliers, utilizing an iterative shift-and-subtract state machine to calculate the `(AC_red * 8) / AC_ir` ratio, minimizing the footprint.
+* **Synchronized Pipeline:** Operates via a 3-state FSM (`IDLE`, `COLLECT`, `DIV`) integrated with a robust SPI deserializer and clock-domain crossing synchronizers.
+* **Component Extraction:** Automatically maintains a 2-sample moving average to act as DC baseline tracking, while extracting the AC peak values needed for the standard `R` ratio evaluation.
 
 ## How to test
 
-To physically test this chip once manufactured (or when using the Tiny Tapeout Commander app):
+To physically test this logic once manufactured:
 
-+ Power & Clock: Ensure the Tiny Tapeout board is powered and the system clock is set to 10 MHz.
-
-+ Reset: Press the system reset button (pulling rst_n LOW) to clear all internal registers. The 7-segment display should show 0.
-
-+ Start Counting: Flip Input Switch 0 (ui_in[0]) to the HIGH (ON) position. The display will begin ticking up by one every second.
-
-+ Pause Counting: Flip Input Switch 0 to the LOW (OFF) position. The display will freeze on the current digit.
-
-+ Resume: Flip Input Switch 0 back HIGH to resume counting from the paused digit.
-
-+ Hard Reset: At any time, pressing the reset button will immediately force the counter back to 0.
+* **SPI Data Input:** Drive sequential sampled values on `ui_in[0]` (SPI Data In) alongside the clock signal on `ui_in[1]`.
+* **Channel Select:** Toggle `ui_in[2]` to denote whether the incoming data stream belongs to the Red channel (`0`) or the IR channel (`1`).
+* **Reset**: Pulse the system reset button (pulling `rst_n` LOW) to initialize the FSM and synchronizers.
+* **Ratio Output:** Read the 7-bit calculated SpO2 Ratio from `uo_out[0:6]`.
+* **Data Valid:** Wait for `uo_out[7]` (Valid Flag) to go HIGH, signaling that the SPI frame has been fully processed and the division algorithm has successfully converged on a stable ratio.
 
 ## External hardware
 
-To view the output of this project, you will need:
+To utilize this signal processing engine, you will need:
 
-+ Tiny Tapeout Demo Board (or equivalent carrier board).
-
-+ 7-Segment Display PMOD connected to the dedicated output pins (uo_out[0:7]).
-
-+ A simple DIP switch or push-button connected to input pin 0 (ui_in[0]) to act as the Start/Pause toggle.
+* Tiny Tapeout Demo Board (or equivalent carrier board).
+* An external optical sensor frontend (like MAX30102) with an SPI master/microcontroller to feed the raw Red/IR digital samples into the input pins.
+* A logic analyzer or the Tiny Tapeout Commander app to stream inputs and observe the computed ratio flags.
