@@ -1,6 +1,6 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
 
-# V-SPACE Demo Hardware Stopwatch
+# Low-Power SpO2 Ratio Engine
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/AdvaittejPS/vspace-280326-demo/blob/main/workshop/V_SPACE_demo_280326_notebook.ipynb)
 
